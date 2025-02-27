@@ -15,17 +15,26 @@ const saltRounds = 10
 // middlewares
 app.use(express.json())
 app.use(cookieParser())
-app.use(cors(
-  {
-    origin: ['http://localhost:5173'],
-    credentials: true
-  }
-));
+app.use(cors({
+  origin: ['https://web-mcash.vercel.app'],
+  credentials: true
+}))
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://web-mcash.vercel.app')
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  res.header('Access-Control-Allow-Credentials', true)
+
+  console.log('Request received:', req.method, req.url)
+
+  next()
+})
 
 // Custom middlewares
 const verifyToken = async (req, res, next) => {
   const token = req.cookies?.token
-  // console.log('Value of token in middleware:', token)
+  console.log('Value of token in middleware:', token)
   if (!token) {
     return res.status(401).send({ message: 'Unauthorized' })
   }
@@ -86,7 +95,7 @@ async function run () {
     // User Register api
     app.post('/register', async (req, res) => {
       const { name, pin, nid, email, mobile, role, balance } = req.body
-  
+
       const existing = await usersCollection.findOne({
         $or: [{ email }, { mobile }, { nid }]
       })
@@ -97,7 +106,7 @@ async function run () {
       let userBalance = balance || 0
       let approved = true
       if (role === 'user') {
-        userBalance = 40 
+        userBalance = 40
       } else if (role === 'agent') {
         userBalance = 100000
         approved = false
@@ -139,8 +148,8 @@ async function run () {
         return res
           .cookie('token', token, {
             httpOnly: true,
-            secure: false,
-            // sameSite: 'strict'
+            secure: true,
+            sameSite: 'none'
           })
           .send({ message: 'Success', email })
       } else {
@@ -392,18 +401,22 @@ async function run () {
 
     app.get('/admin/recharge-requests', verifyToken, async (req, res) => {
       try {
-        const admin = await usersCollection.findOne({ email: req.decoded.email });
+        const admin = await usersCollection.findOne({
+          email: req.decoded.email
+        })
         if (!admin || admin.role !== 'admin') {
-          return res.status(403).send({ message: 'Access denied' });
+          return res.status(403).send({ message: 'Access denied' })
         }
 
-        const requests = await rechargeRequestsCollection.find({ status: 'pending' }).toArray();
-        res.send({ requests });
+        const requests = await rechargeRequestsCollection
+          .find({ status: 'pending' })
+          .toArray()
+        res.send({ requests })
       } catch (error) {
-        console.error('Error fetching recharge requests:', error);
-        res.status(500).send({ message: 'Internal server error' });
+        console.error('Error fetching recharge requests:', error)
+        res.status(500).send({ message: 'Internal server error' })
       }
-    });
+    })
 
     // Agent: Request Balance Recharge
     app.post('/agent/request-money', verifyToken, async (req, res) => {
@@ -440,45 +453,55 @@ async function run () {
       }
     })
 
-    app.put('/admin/recharge-requests/:requestId', verifyToken, async (req, res) => {
-      try {
-        const admin = await usersCollection.findOne({ email: req.decoded.email });
-        if (!admin || admin.role !== 'admin') {
-          return res.status(403).send({ message: 'Access denied' });
+    app.put(
+      '/admin/recharge-requests/:requestId',
+      verifyToken,
+      async (req, res) => {
+        try {
+          const admin = await usersCollection.findOne({
+            email: req.decoded.email
+          })
+          if (!admin || admin.role !== 'admin') {
+            return res.status(403).send({ message: 'Access denied' })
+          }
+
+          const { requestId } = req.params
+          const { approve } = req.body
+
+          const request = await rechargeRequestsCollection.findOne({
+            requestId
+          })
+          if (!request) {
+            return res.status(404).send({ message: 'Request not found' })
+          }
+          if (request.status !== 'pending') {
+            return res
+              .status(400)
+              .send({ message: 'Request already processed' })
+          }
+
+          const newStatus = approve ? 'approved' : 'rejected'
+          await rechargeRequestsCollection.updateOne(
+            { requestId },
+            { $set: { status: newStatus, processedAt: new Date() } }
+          )
+
+          if (approve) {
+            await usersCollection.updateOne(
+              { _id: request.agentId },
+              { $inc: { balance: request.amountInt } }
+            )
+          }
+          res.send({ message: `Request ${newStatus}` })
+        } catch (error) {
+          console.error('Error processing recharge request:', error)
+          res.status(500).send({ message: 'Internal server error' })
         }
-    
-        const { requestId } = req.params;
-        const { approve } = req.body;
-    
-        const request = await rechargeRequestsCollection.findOne({ requestId });
-        if (!request) {
-          return res.status(404).send({ message: 'Request not found' });
-        }
-        if (request.status !== 'pending') {
-          return res.status(400).send({ message: 'Request already processed' });
-        }
-    
-        const newStatus = approve ? 'approved' : 'rejected';
-        await rechargeRequestsCollection.updateOne(
-          { requestId },
-          { $set: { status: newStatus, processedAt: new Date() } }
-        );
-    
-        if (approve) {
-          await usersCollection.updateOne(
-            { _id: request.agentId },
-            { $inc: { balance: request.amountInt } }
-          );
-        }
-        res.send({ message: `Request ${newStatus}` });
-      } catch (error) {
-        console.error('Error processing recharge request:', error);
-        res.status(500).send({ message: 'Internal server error' });
       }
-    });
+    )
 
     // Log out api
-    app.post('/logout', async (req, res) => {
+    app.post('/logout', verifyToken, async (req, res) => {
       res.clearCookie('token')
       res.status(200).json({ message: 'Success' })
     })
