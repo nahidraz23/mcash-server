@@ -16,7 +16,7 @@ const saltRounds = 10
 app.use(express.json())
 app.use(cookieParser())
 app.use(cors({
-  origin: ['https://web-mcash.vercel.app'],
+  origin: 'https://web-mcash.vercel.app',
   credentials: true
 }))
 
